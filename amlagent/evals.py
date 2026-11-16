@@ -31,7 +31,8 @@ async def _run_one(alert_id: str, investigator: str, model, tool_list) -> dict:
 
 
 async def evaluate(investigator: str = "baseline", labels_path: str = "data/labels.json",
-                   limit: int | None = None, model=None, use_mcp: bool = False) -> dict:
+                   limit: int | None = None, model=None, use_mcp: bool = False,
+                   concurrency: int = 1) -> dict:
     labels = json.loads(Path(labels_path).read_text())
     ids = sorted(labels)[:limit]
     tool_list = None
@@ -39,12 +40,18 @@ async def evaluate(investigator: str = "baseline", labels_path: str = "data/labe
         from .graph import make_model, mcp_tools
         model = model or make_model()
         tool_list = await mcp_tools() if use_mcp else None
+    sem = asyncio.Semaphore(concurrency)
+
+    async def guarded(aid):
+        async with sem:
+            try:
+                return await _run_one(aid, investigator, model, tool_list)
+            except Exception as e:  # a crashed case counts as a wrong one, it is not skipped
+                return {"report": None, "first_pass_grounded": 0.0, "attempts": 0, "removed_claims": 0, "error": repr(e)}
+
+    results = await asyncio.gather(*(guarded(a) for a in ids))
     rows = []
-    for aid in ids:
-        try:
-            r = await _run_one(aid, investigator, model, tool_list)
-        except Exception as e:  # a crashed case counts as a wrong one, it is not skipped
-            r = {"report": None, "first_pass_grounded": 0.0, "attempts": 0, "removed_claims": 0, "error": repr(e)}
+    for aid, r in zip(ids, results):
         rep, truth = r["report"], labels[aid]
         rows.append({"alert": aid, "truth": truth["typology"],
                      "predicted": rep.typology if rep else None,
@@ -75,6 +82,7 @@ def main(argv=None) -> int:
     p.add_argument("--labels", default="data/labels.json")
     p.add_argument("--limit", type=int)
     p.add_argument("--mcp", action="store_true", help="load tools through the MCP server")
+    p.add_argument("--concurrency", type=int, default=1, help="alerts investigated at the same time")
     p.add_argument("--gate-typology", type=float, default=0.8)
     p.add_argument("--gate-missed", type=int, default=0, help="max true cases wrongly closed")
     p.add_argument("--out", default="eval_results.json")
@@ -82,7 +90,7 @@ def main(argv=None) -> int:
     if not Path(a.labels).exists():
         from .data import generate
         generate(tools.DB_PATH, a.labels)
-    res = asyncio.run(evaluate(a.investigator, a.labels, a.limit, use_mcp=a.mcp))
+    res = asyncio.run(evaluate(a.investigator, a.labels, a.limit, use_mcp=a.mcp, concurrency=a.concurrency))
     Path(a.out).write_text(json.dumps(res, indent=1))
     m = res["metrics"]
     for k, v in m.items():

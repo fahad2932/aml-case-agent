@@ -13,7 +13,7 @@ import asyncio
 import os
 from typing import Annotated, Any, Optional, TypedDict
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -26,8 +26,9 @@ from .verify import verify_report
 
 SYSTEM = """You investigate anti-money laundering alerts for a bank.
 
-Work the alert with the tools: read the alert, the customer profile, the transactions in the
-review window, and compare with the account's history. Then call submit_report.
+Start with case_overview. It gives you the alert, the customer, the review window against the
+previous 30 days, and the transaction ids. Use the other tools only to look closer at something it
+shows. You have a small budget of tool calls, so then call submit_report.
 
 Rules for the report:
 - disposition is 'escalate' or 'close'. A closed case has typology 'none'.
@@ -35,6 +36,7 @@ Rules for the report:
 - Every claim must cite the record ids that prove it (transaction ids, the customer id or the alert id).
 - If a claim states a total, count, max or min, put it in `check` and cite exactly the
   transactions it is computed over. Copy numbers from tool output. Do not round or estimate.
+  Copy a group's `total` and `transaction_ids` together, as given.
 - An alert firing is not proof. Many alerts are false positives that match the customer's
   declared business and history. Close those and say why.
 
@@ -64,11 +66,22 @@ def default_tools() -> list:
     return [StructuredTool.from_function(f) for f in bank_tools.ALL_TOOLS]
 
 
-def build_graph(model: Any, tools: list | None = None, max_attempts: int = 3):
+def tool_rounds(messages: list) -> int:
+    """How many times the model has asked for data tools so far."""
+    return sum(1 for m in messages if isinstance(m, AIMessage) and m.tool_calls
+               and not any(c["name"] == "submit_report" for c in m.tool_calls))
+
+
+def build_graph(model: Any, tools: list | None = None, max_attempts: int = 3, max_tool_rounds: int = 6):
     tools = tools or default_tools()
     bound = model.bind_tools(tools + [SUBMIT])
+    forced = model.bind_tools([SUBMIT], tool_choice="submit_report")
 
     async def agent(state: State):
+        # Out of budget: the model may no longer ask for data. It must hand in what it has.
+        if tool_rounds(state["messages"]) >= max_tool_rounds:
+            note = HumanMessage("Tool budget used up. Call submit_report now with what you have found.")
+            return {"messages": [note, await forced.ainvoke(state["messages"] + [note])]}
         return {"messages": [await bound.ainvoke(state["messages"])]}
 
     def route(state: State):
@@ -126,8 +139,8 @@ def build_graph(model: Any, tools: list | None = None, max_attempts: int = 3):
 
 
 async def arun_alert(alert_id: str, model: Any, tools: list | None = None, max_attempts: int = 3,
-                     recursion_limit: int = 40) -> dict:
-    graph = build_graph(model, tools, max_attempts)
+                     recursion_limit: int = 60, max_tool_rounds: int = 6) -> dict:
+    graph = build_graph(model, tools, max_attempts, max_tool_rounds)
     state = await graph.ainvoke(
         {"alert_id": alert_id, "attempts": 0, "removed_claims": 0, "report": None, "verification": None,
          "messages": [SystemMessage(SYSTEM), HumanMessage(f"Investigate alert {alert_id}.")]},
