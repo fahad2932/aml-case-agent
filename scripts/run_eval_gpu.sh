@@ -16,4 +16,4 @@ if ! curl -s "localhost:$PORT/v1/models" >/dev/null; then
 fi
 [ -f data/labels.json ] || python -m amlagent.data
 export OPENAI_BASE_URL="http://localhost:$PORT/v1" OPENAI_API_KEY="${OPENAI_API_KEY:-local}" AML_MODEL="$MODEL"
-python -m amlagent.evals --investigator llm ${LIMIT:+--limit "$LIMIT"} --gate-typology 0 --gate-missed 99
+python -m amlagent.evals --investigator llm ${LIMIT:+--limit "$LIMIT"} --concurrency "${CONCURRENCY:-8}" --gate-typology 0 --gate-missed 99
