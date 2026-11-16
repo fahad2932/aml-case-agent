@@ -83,3 +83,11 @@ def test_case_overview_gives_citable_ids_and_the_verifier_accepts_them():
     rep = baseline.investigate("AL0001").model_copy(update={"claims": [claim]})
     assert verify_report(rep).passed
     assert len(str(ov)) < 24000
+
+
+def test_a_model_that_only_chats_is_forced_to_submit():
+    good, _ = reports()
+    m = Scripted(script=[AIMessage(content="Thinking."), AIMessage(content="Still thinking."),
+                         call("submit_report", good, 1)], seen=[], modes=[])
+    out = run_alert("AL0001", m, max_tool_rounds=2)
+    assert m.modes == ["all", "all", "forced"] and out["verification"].passed
