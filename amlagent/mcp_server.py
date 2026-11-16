@@ -7,7 +7,7 @@ from mcp.server.fastmcp import FastMCP
 from . import tools
 
 mcp = FastMCP("aml-bank-data")
-for fn in tools.ALL_TOOLS:
+for fn in tools.AGENT_TOOLS:
     mcp.tool()(fn)
 
 if __name__ == "__main__":

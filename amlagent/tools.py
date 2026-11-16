@@ -187,5 +187,42 @@ def _next_day(day: str) -> str:
     return (dt.date.fromisoformat(day[:10]) + dt.timedelta(days=1)).isoformat()
 
 
+def _agent_list_transactions(account_id: str, start: str, end: str, direction: str | None = None,
+                             channel: str | None = None, min_amount: float | None = None,
+                             max_amount: float | None = None, limit: int = 25) -> dict:
+    out = list_transactions(account_id, start, end, direction, channel, min_amount, max_amount, min(limit, 25))
+    if out["total_matches"] > len(out["transactions"]):
+        out["note"] = "Only the first 25 are shown. Narrow the filters to see others."
+    return out
+
+
+def _agent_summarize_transactions(account_id: str, start: str, end: str, group_by: str = "channel") -> dict:
+    out = summarize_transactions(account_id, start, end, group_by)
+    if "groups" in out:
+        out["groups"] = out["groups"][:15]
+        for g in out["groups"]:
+            if len(g["transaction_ids"]) > 15:
+                g["transaction_ids"] = g["transaction_ids"][:15]
+                g["ids_truncated"] = True
+    return out
+
+
+def _agent_find_linked_flows(account_id: str, start: str, end: str, max_hours: int = 48,
+                             tolerance: float = 0.1) -> dict:
+    pairs = find_linked_flows(account_id, start, end, max_hours, tolerance)["pairs"]
+    return {"pair_count": len(pairs), "pairs": [{"in": _compact(p["in"]), "out": _compact(p["out"]),
+                                                  "hours_between": p["hours_between"]} for p in pairs[:10]]}
+
+
+# The same docstrings and names as the full functions, with output kept small enough for a
+# 32k-token context. Internal code (baseline, verifier) keeps using the uncapped functions.
+for _short, _full in ((_agent_list_transactions, list_transactions),
+                      (_agent_summarize_transactions, summarize_transactions),
+                      (_agent_find_linked_flows, find_linked_flows)):
+    _short.__name__, _short.__doc__ = _full.__name__, _full.__doc__
+
+AGENT_TOOLS = [case_overview, get_alert, get_customer_profile, _agent_list_transactions,
+               _agent_summarize_transactions, _agent_find_linked_flows, baseline_activity]
+
 ALL_TOOLS = [case_overview, get_alert, get_customer_profile, list_transactions, summarize_transactions,
              find_linked_flows, baseline_activity]

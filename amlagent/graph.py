@@ -63,16 +63,17 @@ SUBMIT = StructuredTool.from_function(
 
 
 def default_tools() -> list:
-    return [StructuredTool.from_function(f) for f in bank_tools.ALL_TOOLS]
+    return [StructuredTool.from_function(f) for f in bank_tools.AGENT_TOOLS]
 
 
 def tool_rounds(messages: list) -> int:
-    """How many times the model has asked for data tools so far."""
-    return sum(1 for m in messages if isinstance(m, AIMessage) and m.tool_calls
-               and not any(c["name"] == "submit_report" for c in m.tool_calls))
+    """How many turns the model has spent without handing in a report: data tool calls, and
+    replies with no tool call at all (which would otherwise loop through the nudge forever)."""
+    return sum(1 for m in messages if isinstance(m, AIMessage)
+               and not any(c["name"] == "submit_report" for c in (m.tool_calls or [])))
 
 
-def build_graph(model: Any, tools: list | None = None, max_attempts: int = 3, max_tool_rounds: int = 6):
+def build_graph(model: Any, tools: list | None = None, max_attempts: int = 3, max_tool_rounds: int = 5):
     tools = tools or default_tools()
     bound = model.bind_tools(tools + [SUBMIT])
     forced = model.bind_tools([SUBMIT], tool_choice="submit_report")
@@ -139,7 +140,7 @@ def build_graph(model: Any, tools: list | None = None, max_attempts: int = 3, ma
 
 
 async def arun_alert(alert_id: str, model: Any, tools: list | None = None, max_attempts: int = 3,
-                     recursion_limit: int = 60, max_tool_rounds: int = 6) -> dict:
+                     recursion_limit: int = 60, max_tool_rounds: int = 5) -> dict:
     graph = build_graph(model, tools, max_attempts, max_tool_rounds)
     state = await graph.ainvoke(
         {"alert_id": alert_id, "attempts": 0, "removed_claims": 0, "report": None, "verification": None,
@@ -156,7 +157,8 @@ def make_model():
     """Any OpenAI-compatible endpoint: OpenAI itself, or a self-hosted open-source model
     served on-prem (set OPENAI_BASE_URL to that server). Model name comes from AML_MODEL."""
     from langchain_openai import ChatOpenAI
-    return ChatOpenAI(model=os.environ.get("AML_MODEL", "gpt-4o-mini"), temperature=0)
+    return ChatOpenAI(model=os.environ.get("AML_MODEL", "gpt-4o-mini"), temperature=0,
+                      max_tokens=int(os.environ.get("AML_MAX_TOKENS", "2048")), timeout=300)
 
 
 async def mcp_tools() -> list:
